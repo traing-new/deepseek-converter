@@ -9,19 +9,16 @@ app = Flask(__name__)
 
 CN_FONTS = ["微软雅黑", "宋体", "黑体", "楷体", "仿宋", "等线"]
 EN_FONTS = ["Times New Roman", "Arial", "Calibri", "Cambria", "Consolas", "Courier New"]
+ALIGN_OPTIONS = {"left": 0, "center": 1, "right": 2}
 
 PANDOC_PATH = shutil.which('pandoc') or 'pandoc'
 
-def detect_input_format(text):
-    if re.match(r'^\s*<(!DOCTYPE|html|head|body|div|table|p|ul|ol|li|span|h[1-6])', text, re.IGNORECASE):
-        return 'html'
-    return 'markdown'
-
-def set_docx_fonts(docx_path, body_cn, body_en, heading_cn, heading_en):
+def set_docx_fonts(docx_path, body_cn, body_en, heading_cn, heading_en, heading_aligns):
     from docx import Document
     from docx.shared import Pt, RGBColor
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
+    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 
     doc = Document(docx_path)
 
@@ -37,17 +34,30 @@ def set_docx_fonts(docx_path, body_cn, body_en, heading_cn, heading_en):
         rFonts.set(qn('w:hAnsi'), en)
         rPr.insert(0, rFonts)
 
+    # 正文
     normal = doc.styles['Normal']
     set_style_font(normal, body_cn, body_en)
     normal.font.size = Pt(11)
-    normal.font.color.rgb = RGBColor(0,0,0)
+    normal.font.color.rgb = RGBColor(0, 0, 0)
 
+    align_map = {
+        "left": WD_PARAGRAPH_ALIGNMENT.LEFT,
+        "center": WD_PARAGRAPH_ALIGNMENT.CENTER,
+        "right": WD_PARAGRAPH_ALIGNMENT.RIGHT,
+    }
+
+    # 标题
     for i in range(1, 10):
         name = f'Heading {i}'
         if name in doc.styles:
-            set_style_font(doc.styles[name], heading_cn, heading_en)
-            doc.styles[name].font.color.rgb = RGBColor(0,0,0)
+            heading_style = doc.styles[name]
+            set_style_font(heading_style, heading_cn, heading_en)
+            heading_style.font.color.rgb = RGBColor(0, 0, 0)
+            # 获取该级标题的对齐设置
+            align_str = heading_aligns.get(str(i), "left")
+            heading_style.paragraph_format.alignment = align_map.get(align_str, WD_PARAGRAPH_ALIGNMENT.LEFT)
 
+    # 表格边框
     for table in doc.tables:
         tbl = table._tbl
         tblPr = tbl.find(qn('w:tblPr'))
@@ -55,7 +65,7 @@ def set_docx_fonts(docx_path, body_cn, body_en, heading_cn, heading_en):
             tblPr = OxmlElement('w:tblPr')
             tbl.insert(0, tblPr)
         borders = OxmlElement('w:tblBorders')
-        for border_name in ['top','left','bottom','right','insideH','insideV']:
+        for border_name in ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']:
             border = OxmlElement(f'w:{border_name}')
             border.set(qn('w:val'), 'single')
             border.set(qn('w:sz'), '4')
@@ -83,9 +93,16 @@ def convert():
     heading_cn = request.form.get('heading_cn', '黑体')
     heading_en = request.form.get('heading_en', 'Arial')
 
+    # 收集每级标题的对齐设置
+    heading_aligns = {}
+    for i in range(1, 7):
+        heading_aligns[str(i)] = request.form.get(f'heading{i}_align', 'left')
+
     if input_mode == 'auto':
-        detected = detect_input_format(text)
-        from_fmt = 'html' if detected == 'html' else 'markdown'
+        if re.match(r'^\s*<(!DOCTYPE|html|head|body|div|table|p|ul|ol|li|span|h[1-6])', text, re.IGNORECASE):
+            from_fmt = 'html'
+        else:
+            from_fmt = 'markdown'
     else:
         from_fmt = input_mode
 
@@ -100,7 +117,7 @@ def convert():
             tmp_docx = tempfile.NamedTemporaryFile(suffix='.docx', delete=False)
             tmp_docx.close()
             subprocess.run([PANDOC_PATH, tmp_input, '-f', from_fmt, '-t', 'docx', '-o', tmp_docx.name], check=True)
-            set_docx_fonts(tmp_docx.name, body_cn, body_en, heading_cn, heading_en)
+            set_docx_fonts(tmp_docx.name, body_cn, body_en, heading_cn, heading_en, heading_aligns)
 
             if output_fmt == 'docx':
                 return send_file(tmp_docx.name, as_attachment=True, download_name='converted.docx')
@@ -109,7 +126,7 @@ def convert():
                 tmp_pdf.close()
                 subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir',
                                 os.path.dirname(tmp_pdf.name), tmp_docx.name], check=True)
-                pdf_path = tmp_docx.name.rsplit('.',1)[0] + '.pdf'
+                pdf_path = tmp_docx.name.rsplit('.', 1)[0] + '.pdf'
                 return send_file(pdf_path, as_attachment=True, download_name='converted.pdf')
         else:
             tmp_out = tempfile.NamedTemporaryFile(suffix=f'.{output_fmt}', delete=False)
