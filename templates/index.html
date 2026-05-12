@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>DeepSeek 转换器</title>
-    <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#2b6fcf">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -14,19 +13,46 @@
         textarea { width: 100%; height: 220px; border: 1px solid #ccc; border-radius: 12px; padding: 12px; font-size: 16px; resize: vertical; }
         .row { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; align-items: center; }
         label { font-weight: bold; font-size: 0.9rem; }
-        select { padding: 8px 12px; border-radius: 8px; border: 1px solid #ccc; font-size: 0.9rem; flex: 1; }
+        select, button { padding: 8px 12px; border-radius: 8px; border: 1px solid #ccc; font-size: 0.9rem; }
         .btn { background: #2b6fcf; color: white; border: none; padding: 14px 20px; border-radius: 12px; font-size: 1.1rem; font-weight: bold; width: 100%; cursor: pointer; margin-top: 10px; }
         .btn:active { background: #1e4d8c; }
-        .format-btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+        .format-btns, .tool-btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
         .fbtn { padding: 10px 16px; border: 2px solid #2b6fcf; border-radius: 20px; background: white; color: #2b6fcf; font-weight: bold; }
         .fbtn.active { background: #2b6fcf; color: white; }
-        #status { margin-top: 10px; color: #555; font-size: 0.9rem; text-align: center; }
+        .status { margin-top: 10px; color: #555; font-size: 0.9rem; text-align: center; }
+        .level-select { display: flex; gap: 5px; align-items: center; }
+        .level-select select { width: 120px; }
+        /* 模态框样式 */
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background: rgba(0,0,0,0.4); }
+        .modal-content { background: #fff; margin: 15% auto; padding: 20px; border-radius: 12px; width: 90%; max-width: 400px; }
+        .modal-header { font-size: 1.2rem; font-weight: bold; margin-bottom: 15px; color: #2b6fcf; }
+        .modal-body { display: flex; flex-direction: column; gap: 10px; }
+        .modal-body .row { justify-content: space-between; }
+        .modal-body select { width: 120px; }
+        .modal-footer { margin-top: 20px; display: flex; justify-content: center; gap: 10px; }
+        .modal-footer button { padding: 8px 20px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>📄 格式转换器</h1>
-        <textarea id="textInput" placeholder="粘贴 DeepSeek 生成的内容..."></textarea>
+        <textarea id="textInput" placeholder="在此粘贴要转换的内容..."></textarea>
+
+        <!-- 标题标记工具栏 -->
+        <div class="tool-btns">
+            <div class="level-select">
+                <select id="headingLevel">
+                    <option value="1">一级标题</option>
+                    <option value="2" selected>二级标题</option>
+                    <option value="3">三级标题</option>
+                    <option value="4">四级标题</option>
+                    <option value="5">五级标题</option>
+                    <option value="6">六级标题</option>
+                </select>
+            </div>
+            <button onclick="markHeading()">🔖 标记选中</button>
+            <button onclick="autoDetectHeadings()">🧠 智能识别标题</button>
+        </div>
 
         <div class="row">
             <label>输入</label>
@@ -56,6 +82,10 @@
             </select>
         </div>
 
+        <div class="row">
+            <button onclick="openAlignModal()" style="width:auto;">🎛️ 标题位置设置</button>
+        </div>
+
         <div class="format-btns" id="outputFormat">
             <button class="fbtn active" data-fmt="docx">Word</button>
             <button class="fbtn" data-fmt="pdf">PDF</button>
@@ -65,11 +95,30 @@
         </div>
 
         <button class="btn" onclick="convert()">🚀 转换并下载</button>
-        <div id="status"></div>
+        <div class="status" id="status"></div>
+    </div>
+
+    <!-- 标题对齐模态框 -->
+    <div id="alignModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">设置每级标题的位置</div>
+            <div class="modal-body" id="alignBody"></div>
+            <div class="modal-footer">
+                <button class="btn" onclick="applyAllAlign('left')">全部左对齐</button>
+                <button class="btn" onclick="applyAllAlign('center')">全部居中</button>
+                <button class="btn" onclick="applyAllAlign('right')">全部右对齐</button>
+                <button class="btn" onclick="saveAlign()">保存</button>
+            </div>
+        </div>
     </div>
 
     <script>
         let selectedFmt = 'docx';
+        let headingAligns = {
+            1: 'left', 2: 'left', 3: 'left', 4: 'left', 5: 'left', 6: 'left'
+        };
+
+        // 输出格式切换
         document.querySelectorAll('.fbtn').forEach(btn => {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
@@ -78,20 +127,166 @@
             });
         });
 
+        // 占位符自动清除
+        const textarea = document.getElementById('textInput');
+        textarea.addEventListener('focus', function() {
+            if (this.value === '在此粘贴要转换的内容...') this.value = '';
+        });
+        textarea.addEventListener('blur', function() {
+            if (this.value.trim() === '') this.value = '在此粘贴要转换的内容...';
+        });
+
+        // 手动标记选中文字为标题
+        function markHeading() {
+            const txt = document.getElementById('textInput');
+            const start = txt.selectionStart;
+            const end = txt.selectionEnd;
+            if (start === end) { alert('请先选中要标记的文本'); return; }
+            const level = document.getElementById('headingLevel').value;
+            const prefix = '#'.repeat(level) + ' ';
+            const selected = txt.value.substring(start, end);
+            txt.value = txt.value.substring(0, start) + prefix + selected + txt.value.substring(end);
+            txt.setSelectionRange(start, start + prefix.length + selected.length);
+            document.getElementById('status').textContent = '已标记为 ' + level + ' 级标题';
+        }
+
+        // 智能标题识别（增强版，与 Win 版同步）
+        function autoDetectHeadings() {
+            const txt = document.getElementById('textInput');
+            const content = txt.value;
+            const lines = content.split('\n');
+            const total = lines.length;
+            const candidates = new Set();
+
+            const maxLen = total <= 3 ? 80 : 60;
+
+            for (let i = 0; i < total; i++) {
+                const stripped = lines[i].trim();
+                if (!stripped) continue;
+
+                if (stripped.length > maxLen) continue;
+                if (/[。.]$/.test(stripped)) continue;
+                if (/^(为什么|怎么|如何|是否|难道)/.test(stripped) && stripped.endsWith('？') && stripped.length > 20) continue;
+                if (/^(\d+[.、)]\s*|[-\*\+]\s+)/.test(stripped) && stripped.length > 30) continue;
+
+                const hasOrdinal = /^[（(]?[一二三四五六七八九十]+[）)]?[、．.\s]/.test(stripped) ||
+                                   /^第[一二三四五六七八九十]+[章节部分][、．.\s]?/.test(stripped) ||
+                                   /^\d+[、．.)\s]/.test(stripped);
+                const hasBracket = /^【.+】$/.test(stripped) || /^〖.+〗$/.test(stripped);
+                const shortLine = stripped.length <= 25 && !/[。.]$/.test(stripped);
+
+                const blankBefore = (i === 0) || (lines[i-1].trim() === '');
+                const blankAfter = (i === total-1) || (lines[i+1].trim() === '');
+                const tabBefore = (i > 0) && /^ {4,}/.test(lines[i-1]);
+                const tabAfter = (i < total-1) && /^ {4,}/.test(lines[i+1]);
+                const hasDelimiter = (blankBefore || tabBefore) && (blankAfter || tabAfter);
+
+                if (hasOrdinal || hasBracket) candidates.add(i);
+                else if (shortLine && hasDelimiter) candidates.add(i);
+                else if (i === 0 && stripped.length <= 20) candidates.add(0);
+            }
+
+            if (candidates.size === 0) {
+                alert('未检测到符合标题特征的段落。');
+                return;
+            }
+
+            // 级别推断
+            const headingLevels = {};
+            let lastLine = -1, lastLevel = 0;
+            const sorted = Array.from(candidates).sort((a,b)=>a-b);
+            let first = true;
+
+            sorted.forEach(idx => {
+                const stripped = lines[idx].trim();
+                const clean = stripped.replace(/^#{1,6}\s+/, '');
+                let levelHint = 0;
+                if (/^[一二三四五六七八九十]+[、．.]/.test(clean)) levelHint = 1;
+                else if (/^（[一二三四五六七八九十]+）/.test(clean)) levelHint = 2;
+                else if (/^\d+[、．.]/.test(clean)) levelHint = 2;
+                else if (/^（\d+）/.test(clean)) levelHint = 3;
+                else if (/^第[一二三四五六七八九十]+[章节]/.test(clean)) levelHint = 1;
+
+                let newLevel;
+                if (levelHint > 0) newLevel = levelHint;
+                else if (first) newLevel = (idx === 0) ? 1 : 2;
+                else newLevel = lastLevel;
+
+                newLevel = Math.max(1, Math.min(6, newLevel));
+                headingLevels[idx] = newLevel;
+                lastLine = idx;
+                lastLevel = newLevel;
+                first = false;
+            });
+
+            const newLines = lines.map((line, i) => {
+                if (headingLevels[i] !== undefined) {
+                    const clean = line.replace(/^#{1,6}\s+/, '');
+                    return '#'.repeat(headingLevels[i]) + ' ' + clean;
+                }
+                return line;
+            });
+
+            txt.value = newLines.join('\n');
+            document.getElementById('status').textContent = `已识别 ${sorted.length} 个标题`;
+        }
+
+        // 对齐模态框
+        function openAlignModal() {
+            document.getElementById('alignModal').style.display = 'block';
+            const body = document.getElementById('alignBody');
+            body.innerHTML = '';
+            for (let i = 1; i <= 6; i++) {
+                const div = document.createElement('div');
+                div.className = 'row';
+                div.innerHTML = `
+                    <label>标题 ${i}</label>
+                    <select class="align-select" data-level="${i}">
+                        <option value="left" ${headingAligns[i]==='left'?'selected':''}>左对齐</option>
+                        <option value="center" ${headingAligns[i]==='center'?'selected':''}>居中</option>
+                        <option value="right" ${headingAligns[i]==='right'?'selected':''}>右对齐</option>
+                    </select>
+                `;
+                body.appendChild(div);
+            }
+        }
+
+        function applyAllAlign(align) {
+            document.querySelectorAll('.align-select').forEach(sel => sel.value = align);
+        }
+
+        function saveAlign() {
+            document.querySelectorAll('.align-select').forEach(sel => {
+                headingAligns[parseInt(sel.dataset.level)] = sel.value;
+            });
+            document.getElementById('alignModal').style.display = 'none';
+            document.getElementById('status').textContent = '标题位置已更新';
+        }
+
+        window.onclick = function(event) {
+            if (event.target == document.getElementById('alignModal')) {
+                document.getElementById('alignModal').style.display = 'none';
+            }
+        }
+
+        // 转换函数
         async function convert() {
             const status = document.getElementById('status');
             status.textContent = '正在转换...';
-            const fd = new FormData();
-            fd.append('text', document.getElementById('textInput').value);
-            fd.append('input_mode', document.getElementById('inputMode').value);
-            fd.append('output_fmt', selectedFmt);
-            fd.append('body_cn', document.getElementById('bodyCn').value);
-            fd.append('body_en', document.getElementById('bodyEn').value);
-            fd.append('heading_cn', document.getElementById('headingCn').value);
-            fd.append('heading_en', document.getElementById('headingEn').value);
+            const formData = new FormData();
+            formData.append('text', document.getElementById('textInput').value);
+            formData.append('input_mode', document.getElementById('inputMode').value);
+            formData.append('output_fmt', selectedFmt);
+            formData.append('body_cn', document.getElementById('bodyCn').value);
+            formData.append('body_en', document.getElementById('bodyEn').value);
+            formData.append('heading_cn', document.getElementById('headingCn').value);
+            formData.append('heading_en', document.getElementById('headingEn').value);
+            for (let i = 1; i <= 6; i++) {
+                formData.append(`heading${i}_align`, headingAligns[i]);
+            }
 
             try {
-                const resp = await fetch('/convert', { method: 'POST', body: fd });
+                const resp = await fetch('/convert', { method: 'POST', body: formData });
                 if (!resp.ok) {
                     const err = await resp.text();
                     throw new Error(err || '转换失败');
